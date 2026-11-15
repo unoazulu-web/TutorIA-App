@@ -11,7 +11,7 @@ from google.genai import types
 st.set_page_config(page_title="RoboTutor AI", page_icon="🎓", layout="wide")
 
 # -----------------------------------------------------------------------------
-# 2. AUTO-INICIALIZACIÓN DE BASE DE DATOS Y RESOLUCIÓN DINÁMICA DE MODELO
+# 2. INICIALIZACIÓN DE BASE DE DATOS Y CLIENTE GEMINI (3.8-FLASH)
 # -----------------------------------------------------------------------------
 def init_db():
     """Crea la base de datos FTS5 (<10 ms) y la tabla SRS si no existen."""
@@ -53,28 +53,9 @@ else:
     st.error("⚠️ No se encontró la API Key en st.secrets['GEMINI_API_KEY']. Agrégala en Secrets de Streamlit Cloud.")
     st.stop()
 
+# Fijado al modelo activo oficial recomendado por Google
+MODEL_ID = "gemini-3.8-flash"
 client = genai.Client(api_key=API_KEY)
-
-@st.cache_resource
-def resolve_working_model(_client):
-    """Obtiene dinámicamente el modelo Flash activo compatible con tu API Key."""
-    try:
-        available_models = list(_client.models.list())
-        # 1. Buscar modelos 'flash' activos que soporten generateContent
-        for m in available_models:
-            methods = getattr(m, "supported_generation_methods", []) or []
-            if "flash" in m.name.lower() and "generateContent" in methods:
-                return m.name
-        # 2. Si no hay con 'flash', tomar el primer modelo compatible con generateContent
-        for m in available_models:
-            methods = getattr(m, "supported_generation_methods", []) or []
-            if "generateContent" in methods:
-                return m.name
-    except Exception:
-        pass
-    return "gemini-2.5-flash"
-
-MODEL_ID = resolve_working_model(client)
 
 def query_tatoeba(keyword: str, limit: int = 5):
     """Búsqueda ultra-rápida FTS5 en corpus bilingüe de Tatoeba (<10 ms)."""
@@ -132,7 +113,7 @@ def speak_in_browser(text: str):
 # 3. INTERFAZ Y LÓGICA DE USUARIO
 # -----------------------------------------------------------------------------
 st.title("🎓 RoboTutor AI - Adquisición Acelerada de Inglés")
-st.caption(f"Modelo Activo Asignado: `{MODEL_ID}` | Input Comprensible (i+1) | Recasting Conversacional")
+st.caption(f"Modelo: `{MODEL_ID}` | Input Comprensible (i+1) | Recasting Conversacional")
 
 with st.sidebar:
     st.header("⚙️ Configuración")
@@ -244,7 +225,7 @@ if active_text or active_audio_tuple:
                     config=types.GenerateContentConfig(
                         system_instruction=full_system_instruction,
                         temperature=0.7,
-                        max_output_tokens=500,
+                        max_output_tokens=400,
                     )
                 )
                 bot_reply = res.text
