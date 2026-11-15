@@ -11,10 +11,10 @@ from google.genai import types
 st.set_page_config(page_title="RoboTutor AI", page_icon="🎓", layout="wide")
 
 # -----------------------------------------------------------------------------
-# 2. AUTO-INICIALIZACIÓN DE BASE DE DATOS Y CONEXIÓN ROBUSTA
+# 2. AUTO-INICIALIZACIÓN DE BASE DE DATOS Y CLIENTE CON FALLBACK
 # -----------------------------------------------------------------------------
 def init_db():
-    """Crea la base de datos FTS5 (<10 ms) y la tabla de memoria SRS."""
+    """Crea la base de datos FTS5 (<10 ms) y la tabla SRS si no existen."""
     conn = sqlite3.connect("tatoeba_pairs.db")
     cursor = conn.cursor()
     cursor.execute("""
@@ -48,17 +48,12 @@ def init_db():
 init_db()
 
 if "GEMINI_API_KEY" in st.secrets:
-    API_KEY = st.secrets["GEMINI_API_KEY"]
+    API_KEY = st.secrets["GEMINI_API_KEY"].strip()
 else:
     st.error("⚠️ No se encontró la API Key en st.secrets['GEMINI_API_KEY']. Agrégala en Secrets de Streamlit Cloud.")
     st.stop()
 
-# Modelo flash configurado con timeout amplio de 90 segundos
-MODEL_ID = "gemini-3.8-flash"
-client = genai.Client(
-    api_key=API_KEY,
-    http_options=types.HttpOptions(timeout=90.0)
-)
+client = genai.Client(api_key=API_KEY)
 
 def query_tatoeba(keyword: str, limit: int = 5):
     """Búsqueda ultra-rápida FTS5 en corpus bilingüe de Tatoeba (<10 ms)."""
@@ -112,11 +107,36 @@ def speak_in_browser(text: str):
     """
     components.html(js_code, height=0, width=0)
 
+def generate_response_with_fallback(contents, system_instruction):
+    """Intenta conectarse a los modelos activos y realiza fallback automático si no responde alguno."""
+    candidate_models = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"]
+    config = types.GenerateContentConfig(
+        system_instruction=system_instruction,
+        temperature=0.7,
+        max_output_tokens=500,
+    )
+    
+    last_exception = None
+    for model_name in candidate_models:
+        try:
+            res = client.models.generate_content(
+                model=model_name,
+                contents=contents,
+                config=config
+            )
+            if res and res.text:
+                return res.text
+        except Exception as e:
+            last_exception = e
+            continue
+            
+    raise last_exception if last_exception else RuntimeError("No se pudo conectar a ningún modelo de Gemini.")
+
 # -----------------------------------------------------------------------------
 # 3. INTERFAZ Y LÓGICA DE USUARIO
 # -----------------------------------------------------------------------------
 st.title("🎓 RoboTutor AI - Adquisición Acelerada de Inglés")
-st.caption("Input Comprensible (i+1) | Recasting Conversacional | Respuestas Completas")
+st.caption("Input Comprensible (i+1) | Recasting Conversacional | Limpieza Multimodal Nativa")
 
 with st.sidebar:
     st.header("⚙️ Configuración")
@@ -164,7 +184,7 @@ if "messages" not in st.session_state:
 if "processed_audio_hashes" not in st.session_state:
     st.session_state.processed_audio_hashes = set()
 
-# Renderizado de mensajes previos
+# Renderizado de historial
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
@@ -182,7 +202,11 @@ elif audio_val is not None:
     audio_hash = hashlib.md5(audio_bytes).hexdigest()
     if audio_hash not in st.session_state.processed_audio_hashes:
         st.session_state.processed_audio_hashes.add(audio_hash)
-        active_audio_tuple = (audio_bytes, audio_val.type or "audio/wav")
+        
+        # Extraer y limpiar el tipo MIME para eliminar sufijos como ';codecs=opus'
+        raw_mime = audio_val.type or "audio/wav"
+        clean_mime = raw_mime.split(";")[0].strip()
+        active_audio_tuple = (audio_bytes, clean_mime)
 
 if active_text or active_audio_tuple:
     recent_messages = st.session_state.messages[-4:]
@@ -193,8 +217,6 @@ if active_text or active_audio_tuple:
             types.Content(role=role, parts=[types.Part.from_text(text=m["content"])])
         )
 
-    is_audio_prompt = False
-
     if active_text:
         st.session_state.messages.append({"role": "user", "content": active_text})
         with st.chat_message("user"):
@@ -204,16 +226,15 @@ if active_text or active_audio_tuple:
         )
 
     elif active_audio_tuple:
-        is_audio_prompt = True
-        bytes_data, mime = active_audio_tuple
+        bytes_data, clean_mime = active_audio_tuple
         with st.chat_message("user"):
-            st.audio(bytes_data, format=mime)
+            st.audio(bytes_data, format=clean_mime)
             st.caption("🎙️ Mensaje de voz enviado")
 
         st.session_state.messages.append({"role": "user", "content": "🎙️ [Mensaje de voz enviado]"})
 
-        prompt_instruction = "Listen to my audio. Recast any grammar mistakes naturally, answer complete sentences, and end with an open question."
-        audio_part = types.Part.from_bytes(data=bytes_data, mime_type=mime)
+        prompt_instruction = "Listen to my audio. Recast any grammar mistakes naturally, answer in complete sentences, and end with an open question."
+        audio_part = types.Part.from_bytes(data=bytes_data, mime_type=clean_mime)
         text_part = types.Part.from_text(text=prompt_instruction)
 
         formatted_contents.append(
@@ -221,54 +242,12 @@ if active_text or active_audio_tuple:
         )
 
     with st.chat_message("assistant"):
-        bot_reply = ""
-        # Configuración con token limit amplio (600 tokens) para evitar frases incompletas
-        gen_config = types.GenerateContentConfig(
-            system_instruction=full_system_instruction,
-            temperature=0.7,
-            max_output_tokens=600,
-        )
-
-        try:
-            if is_audio_prompt:
-                # Procesamiento síncrono para audio (evita cortes de streaming)
-                with st.spinner("RoboTutor está escuchando tu respuesta..."):
-                    res = client.models.generate_content(
-                        model=MODEL_ID,
-                        contents=formatted_contents,
-                        config=gen_config
-                    )
-                    bot_reply = res.text
-                    st.markdown(bot_reply)
-            else:
-                # Streaming para texto
-                res_stream = client.models.generate_content_stream(
-                    model=MODEL_ID,
-                    contents=formatted_contents,
-                    config=gen_config
-                )
-
-                def generate_chunks():
-                    for chunk in res_stream:
-                        if chunk.text:
-                            yield chunk.text
-
-                bot_reply = st.write_stream(generate_chunks())
-
-        except Exception:
-            # Reintento de respaldo automático silencioso si falla la conexión primaria
+        with st.spinner("RoboTutor está procesando tu respuesta..."):
             try:
-                res_fallback = client.models.generate_content(
-                    model=MODEL_ID,
-                    contents=formatted_contents,
-                    config=gen_config
-                )
-                bot_reply = res_fallback.text
+                bot_reply = generate_response_with_fallback(formatted_contents, full_system_instruction)
                 st.markdown(bot_reply)
-            except Exception as final_err:
-                st.warning("No se pudo completar la conexión en este turno. Por favor, intenta enviar tu mensaje nuevamente.")
-
-        if bot_reply:
-            st.session_state.messages.append({"role": "assistant", "content": bot_reply})
-            if enable_audio_reply:
-                speak_in_browser(bot_reply)
+                st.session_state.messages.append({"role": "assistant", "content": bot_reply})
+                if enable_audio_reply:
+                    speak_in_browser(bot_reply)
+            except Exception as e:
+                st.error(f"Error de conexión con la API de Gemini: {e}")
