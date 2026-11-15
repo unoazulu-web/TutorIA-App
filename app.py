@@ -234,4 +234,4 @@ if active_text or active_audio_tuple:
                 if enable_audio_reply and bot_reply:
                     speak_in_browser(bot_reply)
             except Exception as e:
-                st.error(f"Error de conexión con la API
+                st.error(f"Error de conexión con la API de Gemini: {e}")
