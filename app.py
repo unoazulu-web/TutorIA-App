@@ -60,7 +60,6 @@ else:
     st.error("⚠️ No se encontró la API Key. Añade 'GEMINI_API_KEY' en los Secrets de tu app en Streamlit Cloud.")
     st.stop()
 
-# Actualización al modelo activo gemini-3.8-flash
 MODEL_ID = "gemini-3.8-flash"
 client = genai.Client(api_key=API_KEY)
 
@@ -158,24 +157,18 @@ if "messages" not in st.session_state:
         {"role": "assistant", "content": f"Hello! I am RoboTutor, your AI English coach. I see you are practicing at the **{cefr_level}** level. What did you do today?"}
     ]
 
+# Renderizar el historial de conversación
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
 
+# Entradas del usuario
 user_input = st.chat_input("Escribe tu mensaje en inglés...")
 audio_val = st.audio_input("O presiona para grabar tu respuesta hablada")
 
-active_prompt = None
-if user_input:
-    active_prompt = user_input
-elif audio_val is not None:
-    active_prompt = "Audio message received. Please respond to the user based on pedagogical recasting."
-
-if active_prompt:
-    st.session_state.messages.append({"role": "user", "content": active_prompt})
-    with st.chat_message("user"):
-        st.markdown(active_prompt)
-
+# Procesamiento cuando hay interacción de texto o voz
+if user_input or audio_val is not None:
+    # 1. Preparar historial anterior para la API
     formatted_contents = []
     for m in st.session_state.messages:
         role = "user" if m["role"] == "user" else "model"
@@ -183,8 +176,39 @@ if active_prompt:
             types.Content(role=role, parts=[types.Part.from_text(text=m["content"])])
         )
 
+    # 2. Agregar el nuevo mensaje según la modalidad empleada
+    if user_input:
+        st.session_state.messages.append({"role": "user", "content": user_input})
+        with st.chat_message("user"):
+            st.markdown(user_input)
+        
+        formatted_contents.append(
+            types.Content(role="user", parts=[types.Part.from_text(text=user_input)])
+        )
+
+    elif audio_val is not None:
+        audio_bytes = audio_val.getvalue()
+        mime_type = audio_val.type or "audio/wav"
+
+        # Mostrar reproductor de voz en el chat del usuario
+        with st.chat_message("user"):
+            st.audio(audio_bytes, format=mime_type)
+            st.caption("🎙️ Mensaje de voz enviado")
+
+        st.session_state.messages.append({"role": "user", "content": "🎙️ [Mensaje de audio enviado]"})
+
+        # Construir entrada multimodal para Gemini (Audio + Instrucción)
+        prompt_instruction = "Listen to my audio response carefully. Answer my points, recast any mistakes naturally, and ask an open question."
+        audio_part = types.Part.from_bytes(data=audio_bytes, mime_type=mime_type)
+        text_part = types.Part.from_text(text=prompt_instruction)
+
+        formatted_contents.append(
+            types.Content(role="user", parts=[audio_part, text_part])
+        )
+
+    # 3. Generar la respuesta del modelo
     with st.chat_message("assistant"):
-        with st.spinner("RoboTutor está analizando tu respuesta..."):
+        with st.spinner("RoboTutor está escuchando y procesando tu respuesta..."):
             try:
                 response = client.models.generate_content(
                     model=MODEL_ID,
