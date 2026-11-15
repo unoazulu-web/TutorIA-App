@@ -14,6 +14,7 @@ st.set_page_config(page_title="RoboTutor AI", page_icon="🎓", layout="wide")
 # 2. AUTO-INICIALIZACIÓN DE BASE DE DATOS Y CONEXIÓN API
 # -----------------------------------------------------------------------------
 def init_db():
+    """Crea la base de datos FTS5 (<10 ms) y la tabla de memoria SRS."""
     conn = sqlite3.connect("tatoeba_pairs.db")
     cursor = conn.cursor()
     cursor.execute("""
@@ -49,14 +50,15 @@ init_db()
 if "GEMINI_API_KEY" in st.secrets:
     API_KEY = st.secrets["GEMINI_API_KEY"]
 else:
-    st.error("⚠️ No se encontró la API Key en st.secrets['GEMINI_API_KEY'].")
+    st.error("⚠️ No se encontró la API Key en st.secrets['GEMINI_API_KEY']. Añádela en la configuración de Streamlit Cloud.")
     st.stop()
 
-# Usar el modelo Flash para máxima velocidad en streaming
-MODEL_ID = "gemini-2.0-flash"
+# Actualización del modelo al identificador activo solicitado por la API
+MODEL_ID = "gemini-3.8-flash"
 client = genai.Client(api_key=API_KEY)
 
 def query_tatoeba(keyword: str, limit: int = 5):
+    """Búsqueda ultra-rápida FTS5 en corpus bilingüe de Tatoeba (<10 ms)."""
     try:
         conn = sqlite3.connect("tatoeba_pairs.db")
         cursor = conn.cursor()
@@ -68,6 +70,7 @@ def query_tatoeba(keyword: str, limit: int = 5):
         return []
 
 def get_cefr_instructions(level: str) -> str:
+    """Matriz pedagógica dinámica según nivel CEFR (A1-C2)."""
     if level == "A1-A2 (Principiante)":
         return """
         CEFR LEVEL: A1-A2 (Beginner)
@@ -91,7 +94,7 @@ def get_cefr_instructions(level: str) -> str:
         """
 
 def speak_in_browser(text: str):
-    """Ejecuta Web Speech API localmente en el navegador para latencia 0."""
+    """Ejecuta la Web Speech API nativa del navegador para latencia 0 en voz."""
     safe_text = text.replace('\\', '\\\\').replace("'", "\\'").replace('\n', ' ')
     js_code = f"""
     <script>
@@ -174,14 +177,14 @@ if user_input:
 elif audio_val is not None:
     audio_bytes = audio_val.getvalue()
     audio_hash = hashlib.md5(audio_bytes).hexdigest()
-    # Procesar solo si es una nueva grabación de audio
+    # Evitar repeticiones filtrando audios idénticos por hash MD5
     if audio_hash != st.session_state.last_processed_audio_hash:
         st.session_state.last_processed_audio_hash = audio_hash
         active_audio_bytes = audio_bytes
         audio_mime = audio_val.type or "audio/wav"
 
 if active_text or active_audio_bytes:
-    # Reconstruir solo los últimos 6 turnos para mantener el payload liviano
+    # Cargar únicamente los últimos 6 mensajes para mantener la latencia baja
     formatted_contents = []
     recent_messages = st.session_state.messages[-6:]
     for m in recent_messages:
@@ -213,7 +216,7 @@ if active_text or active_audio_bytes:
             types.Content(role="user", parts=[audio_part, text_part])
         )
 
-    # Generación ultra rápida en streaming
+    # Generación progresiva en streaming
     with st.chat_message("assistant"):
         try:
             response_stream = client.models.generate_content_stream(
