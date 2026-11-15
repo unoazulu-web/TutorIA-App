@@ -6,15 +6,15 @@ from google import genai
 from google.genai import types
 
 # -----------------------------------------------------------------------------
-# 1. CONFIGURACIÓN INICIAL DE PÁGINA EN STREAMLIT
+# 1. CONFIGURACIÓN DE PÁGINA DE STREAMLIT
 # -----------------------------------------------------------------------------
 st.set_page_config(page_title="RoboTutor AI", page_icon="🎓", layout="wide")
 
 # -----------------------------------------------------------------------------
-# 2. AUTO-INICIALIZACIÓN DE BASE DE DATOS Y CONEXIÓN A GEMINI 3.8 FLASH
+# 2. AUTO-INICIALIZACIÓN DE BASE DE DATOS Y CONEXIÓN ROBUSTA
 # -----------------------------------------------------------------------------
 def init_db():
-    """Crea la base de datos FTS5 (<10 ms) y la tabla SRS si no existen."""
+    """Crea la base de datos FTS5 (<10 ms) y la tabla de memoria SRS."""
     conn = sqlite3.connect("tatoeba_pairs.db")
     cursor = conn.cursor()
     cursor.execute("""
@@ -50,12 +50,15 @@ init_db()
 if "GEMINI_API_KEY" in st.secrets:
     API_KEY = st.secrets["GEMINI_API_KEY"]
 else:
-    st.error("⚠️ No se encontró la API Key en st.secrets['GEMINI_API_KEY']. Configúrala en Secrets de Streamlit Cloud.")
+    st.error("⚠️ No se encontró la API Key en st.secrets['GEMINI_API_KEY']. Agrégala en Secrets de Streamlit Cloud.")
     st.stop()
 
-# Cliente inicializado con Gemini 3.8 Flash
+# Modelo flash configurado con timeout amplio de 90 segundos
 MODEL_ID = "gemini-3.8-flash"
-client = genai.Client(api_key=API_KEY)
+client = genai.Client(
+    api_key=API_KEY,
+    http_options=types.HttpOptions(timeout=90.0)
+)
 
 def query_tatoeba(keyword: str, limit: int = 5):
     """Búsqueda ultra-rápida FTS5 en corpus bilingüe de Tatoeba (<10 ms)."""
@@ -74,7 +77,7 @@ def get_cefr_instructions(level: str) -> str:
     if level == "A1-A2 (Principiante)":
         return """
         CEFR LEVEL: A1-A2 (Beginner)
-        - Conduct: Use short sentences, speak slowly and clearly. Brief bilingual support in Spanish if needed.
+        - Conduct: Short, simple sentences, clear vocabulary. Brief bilingual support in Spanish if needed.
         - Correction Rate: Direct and guided (Recasting + brief natural explanation).
         - Fluency Goal: Automate 500 basic structures and everyday vocabulary.
         """
@@ -94,7 +97,7 @@ def get_cefr_instructions(level: str) -> str:
         """
 
 def speak_in_browser(text: str):
-    """Sintetiza la respuesta por voz en el navegador mediante Web Speech API (Latencia 0 ms)."""
+    """Sintetiza la respuesta por voz en el navegador con Web Speech API (Latencia 0 ms)."""
     safe_text = text.replace('\\', '\\\\').replace("'", "\\'").replace('\n', ' ')
     js_code = f"""
     <script>
@@ -113,7 +116,7 @@ def speak_in_browser(text: str):
 # 3. INTERFAZ Y LÓGICA DE USUARIO
 # -----------------------------------------------------------------------------
 st.title("🎓 RoboTutor AI - Adquisición Acelerada de Inglés")
-st.caption("Modelo Gemini 3.8 Flash | Recasting Conversacional | Respuestas sin Latencia")
+st.caption("Input Comprensible (i+1) | Recasting Conversacional | Respuestas Completas")
 
 with st.sidebar:
     st.header("⚙️ Configuración")
@@ -123,7 +126,7 @@ with st.sidebar:
         index=1
     )
     
-    enable_audio_reply = st.toggle("🔊 Voz Nativa (Browser Speech API)", value=True)
+    enable_audio_reply = st.toggle("🔊 Respuesta por Voz Nativa (Browser API)", value=True)
 
     st.divider()
     st.subheader("🔍 Buscador de Frases (Tatoeba FTS5)")
@@ -145,10 +148,10 @@ with st.sidebar:
 BASE_SYSTEM_PROMPT = """You are RoboTutor, an AI English teacher built on Task-Based Language Teaching (TBLT).
 
 CORE PEDAGOGICAL PROTOCOL:
-1. COMPREHENSIBLE INPUT (i+1): Keep 85% easy, 15% challenging. Keep responses concise (strictly 2 to 3 short sentences).
+1. COMPREHENSIBLE INPUT (i+1): Keep 85% easy, 15% challenging. Keep responses focused and concise (3 to 4 complete sentences). NEVER stop mid-sentence.
 2. RECASTING TECHNIQUE: Never interrupt or penalize explicitly. Rephrase student mistakes naturally inside your answer.
 3. LEXICAL CHUNKS: Use natural collocations and sentence patterns.
-4. ACTIVE ENGAGEMENT: Always close your response with a short open-ended question.
+4. ACTIVE ENGAGEMENT: Always close your response with a clear, open-ended question.
 """
 
 full_system_instruction = BASE_SYSTEM_PROMPT + "\n" + get_cefr_instructions(cefr_level)
@@ -161,6 +164,7 @@ if "messages" not in st.session_state:
 if "processed_audio_hashes" not in st.session_state:
     st.session_state.processed_audio_hashes = set()
 
+# Renderizado de mensajes previos
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
@@ -189,7 +193,7 @@ if active_text or active_audio_tuple:
             types.Content(role=role, parts=[types.Part.from_text(text=m["content"])])
         )
 
-    is_audio = False
+    is_audio_prompt = False
 
     if active_text:
         st.session_state.messages.append({"role": "user", "content": active_text})
@@ -200,7 +204,7 @@ if active_text or active_audio_tuple:
         )
 
     elif active_audio_tuple:
-        is_audio = True
+        is_audio_prompt = True
         bytes_data, mime = active_audio_tuple
         with st.chat_message("user"):
             st.audio(bytes_data, format=mime)
@@ -208,7 +212,7 @@ if active_text or active_audio_tuple:
 
         st.session_state.messages.append({"role": "user", "content": "🎙️ [Mensaje de voz enviado]"})
 
-        prompt_instruction = "Listen to my voice. Apply Recasting if I made mistakes, answer concisely in 2 sentences, and ask an open question."
+        prompt_instruction = "Listen to my audio. Recast any grammar mistakes naturally, answer complete sentences, and end with an open question."
         audio_part = types.Part.from_bytes(data=bytes_data, mime_type=mime)
         text_part = types.Part.from_text(text=prompt_instruction)
 
@@ -218,55 +222,53 @@ if active_text or active_audio_tuple:
 
     with st.chat_message("assistant"):
         bot_reply = ""
-        config = types.GenerateContentConfig(
+        # Configuración con token limit amplio (600 tokens) para evitar frases incompletas
+        gen_config = types.GenerateContentConfig(
             system_instruction=full_system_instruction,
             temperature=0.7,
-            max_output_tokens=150,
+            max_output_tokens=600,
         )
 
         try:
-            if is_audio:
-                # Para entradas de audio: respuesta directa síncrona (elimina timeouts de sockets de lectura)
-                with st.spinner("RoboTutor está analizando tu audio..."):
-                    response = client.models.generate_content(
+            if is_audio_prompt:
+                # Procesamiento síncrono para audio (evita cortes de streaming)
+                with st.spinner("RoboTutor está escuchando tu respuesta..."):
+                    res = client.models.generate_content(
                         model=MODEL_ID,
                         contents=formatted_contents,
-                        config=config
+                        config=gen_config
                     )
-                    bot_reply = response.text
+                    bot_reply = res.text
                     st.markdown(bot_reply)
             else:
-                # Para texto: streaming progresivo instantáneo
-                response_stream = client.models.generate_content_stream(
+                # Streaming para texto
+                res_stream = client.models.generate_content_stream(
                     model=MODEL_ID,
                     contents=formatted_contents,
-                    config=config
+                    config=gen_config
                 )
 
                 def generate_chunks():
-                    for chunk in response_stream:
+                    for chunk in res_stream:
                         if chunk.text:
                             yield chunk.text
 
                 bot_reply = st.write_stream(generate_chunks())
 
-            st.session_state.messages.append({"role": "assistant", "content": bot_reply})
-
-            if enable_audio_reply and bot_reply:
-                speak_in_browser(bot_reply)
-
-        except Exception as e:
-            # Fallback automático en caso de fluctuaciones de conexión
+        except Exception:
+            # Reintento de respaldo automático silencioso si falla la conexión primaria
             try:
-                response = client.models.generate_content(
+                res_fallback = client.models.generate_content(
                     model=MODEL_ID,
                     contents=formatted_contents,
-                    config=config
+                    config=gen_config
                 )
-                bot_reply = response.text
+                bot_reply = res_fallback.text
                 st.markdown(bot_reply)
-                st.session_state.messages.append({"role": "assistant", "content": bot_reply})
-                if enable_audio_reply and bot_reply:
-                    speak_in_browser(bot_reply)
-            except Exception as fallback_err:
-                st.error(f"Error de conexión con la API de Gemini: {fallback_err}")
+            except Exception as final_err:
+                st.warning("No se pudo completar la conexión en este turno. Por favor, intenta enviar tu mensaje nuevamente.")
+
+        if bot_reply:
+            st.session_state.messages.append({"role": "assistant", "content": bot_reply})
+            if enable_audio_reply:
+                speak_in_browser(bot_reply)
