@@ -1,7 +1,9 @@
 import sqlite3
+import io
 import streamlit as st
 from google import genai
 from google.genai import types
+from gtts import gTTS
 
 # -----------------------------------------------------------------------------
 # 1. CONFIGURACIÓN INICIAL DE PÁGINA DE STREAMLIT
@@ -50,10 +52,8 @@ def init_db():
 
     conn.close()
 
-# Ejecutar inicialización de tablas SQLite
 init_db()
 
-# Carga segura de la API Key desde los Secrets encriptados de Streamlit
 if "GEMINI_API_KEY" in st.secrets:
     API_KEY = st.secrets["GEMINI_API_KEY"]
 else:
@@ -104,13 +104,23 @@ def get_cefr_instructions(level: str) -> str:
         - Fluency Goal: Professional mastery and complex technical argumentation.
         """
 
+def speak_text(text: str):
+    """Sintetiza la respuesta del tutor en voz (inglés) y la reproduce."""
+    try:
+        tts = gTTS(text=text, lang='en', slow=False)
+        sound_file = io.BytesIO()
+        tts.write_to_fp(sound_file)
+        sound_file.seek(0)
+        st.audio(sound_file.read(), format="audio/mp3", autoplay=True)
+    except Exception as e:
+        st.warning(f"No se pudo generar la voz: {e}")
+
 # -----------------------------------------------------------------------------
 # 3. INTERFAZ Y LÓGICA DE USUARIO EN STREAMLIT
 # -----------------------------------------------------------------------------
 st.title("🎓 RoboTutor AI - Método Científico de Adquisición de Lenguaje")
 st.caption("Basado en Input Comprensible (i+1), Recasting Conversacional, Enfoque Léxico (Tatoeba) y SRS")
 
-# Barra lateral de configuración CEFR y utilidades
 with st.sidebar:
     st.header("⚙️ Configuración del Alumno")
     cefr_level = st.selectbox(
@@ -119,6 +129,8 @@ with st.sidebar:
         index=1
     )
     
+    enable_audio_reply = st.toggle("🔊 Respuesta por Voz (Text-to-Speech)", value=True)
+
     st.divider()
     st.subheader("🔍 Buscador de Frases (Tatoeba FTS5)")
     search_term = st.text_input("Buscar expresión o palabra clave:")
@@ -157,18 +169,16 @@ if "messages" not in st.session_state:
         {"role": "assistant", "content": f"Hello! I am RoboTutor, your AI English coach. I see you are practicing at the **{cefr_level}** level. What did you do today?"}
     ]
 
-# Renderizar el historial de conversación
+# Renderizar el historial existente
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
 
-# Entradas del usuario
+# Captura de entrada (Texto o Voz)
 user_input = st.chat_input("Escribe tu mensaje en inglés...")
 audio_val = st.audio_input("O presiona para grabar tu respuesta hablada")
 
-# Procesamiento cuando hay interacción de texto o voz
 if user_input or audio_val is not None:
-    # 1. Preparar historial anterior para la API
     formatted_contents = []
     for m in st.session_state.messages:
         role = "user" if m["role"] == "user" else "model"
@@ -176,7 +186,6 @@ if user_input or audio_val is not None:
             types.Content(role=role, parts=[types.Part.from_text(text=m["content"])])
         )
 
-    # 2. Agregar el nuevo mensaje según la modalidad empleada
     if user_input:
         st.session_state.messages.append({"role": "user", "content": user_input})
         with st.chat_message("user"):
@@ -190,15 +199,13 @@ if user_input or audio_val is not None:
         audio_bytes = audio_val.getvalue()
         mime_type = audio_val.type or "audio/wav"
 
-        # Mostrar reproductor de voz en el chat del usuario
         with st.chat_message("user"):
             st.audio(audio_bytes, format=mime_type)
             st.caption("🎙️ Mensaje de voz enviado")
 
-        st.session_state.messages.append({"role": "user", "content": "🎙️ [Mensaje de audio enviado]"})
+        st.session_state.messages.append({"role": "user", "content": "🎙️ [Audio grabado por el estudiante]"})
 
-        # Construir entrada multimodal para Gemini (Audio + Instrucción)
-        prompt_instruction = "Listen to my audio response carefully. Answer my points, recast any mistakes naturally, and ask an open question."
+        prompt_instruction = "Listen to my voice. Address my response using Recasting for any errors, and ask a relevant question."
         audio_part = types.Part.from_bytes(data=audio_bytes, mime_type=mime_type)
         text_part = types.Part.from_text(text=prompt_instruction)
 
@@ -206,20 +213,29 @@ if user_input or audio_val is not None:
             types.Content(role="user", parts=[audio_part, text_part])
         )
 
-    # 3. Generar la respuesta del modelo
+    # Generación y respuesta en tiempo real
     with st.chat_message("assistant"):
-        with st.spinner("RoboTutor está escuchando y procesando tu respuesta..."):
-            try:
-                response = client.models.generate_content(
-                    model=MODEL_ID,
-                    contents=formatted_contents,
-                    config=types.GenerateContentConfig(
-                        system_instruction=full_system_instruction,
-                        temperature=0.7,
-                    )
+        try:
+            response_stream = client.models.generate_content_stream(
+                model=MODEL_ID,
+                contents=formatted_contents,
+                config=types.GenerateContentConfig(
+                    system_instruction=full_system_instruction,
+                    temperature=0.7,
                 )
-                bot_reply = response.text
-                st.markdown(bot_reply)
-                st.session_state.messages.append({"role": "assistant", "content": bot_reply})
-            except Exception as e:
-                st.error(f"Error al comunicar con RoboTutor API: {e}")
+            )
+
+            def generate_chunks():
+                for chunk in response_stream:
+                    if chunk.text:
+                        yield chunk.text
+
+            bot_reply = st.write_stream(generate_chunks())
+            st.session_state.messages.append({"role": "assistant", "content": bot_reply})
+
+            # Generar audio de respuesta automáticamente
+            if enable_audio_reply and bot_reply:
+                speak_text(bot_reply)
+
+        except Exception as e:
+            st.error(f"Error al comunicar con RoboTutor API: {e}")
