@@ -1,15 +1,15 @@
-import streamlit as st
 import sqlite3
+import streamlit as st
 from google import genai
 from google.genai import types
 
 # -----------------------------------------------------------------------------
-# 1. CONFIGURACIÓN INICIAL DE PÁGINA (DEBE SER LA PRIMERA INSTRUCCIÓN DE ST)
+# 1. CONFIGURACIÓN INICIAL DE PÁGINA DE STREAMLIT
 # -----------------------------------------------------------------------------
 st.set_page_config(page_title="RoboTutor AI", page_icon="🎓", layout="wide")
 
 # -----------------------------------------------------------------------------
-# 2. AUTO-INICIALIZACIÓN DE LA BASE DE DATOS Y CONEXIÓN CON GEMINI
+# 2. AUTO-INICIALIZACIÓN DE BASE DE DATOS Y LECTURA SEGURA DE API KEY
 # -----------------------------------------------------------------------------
 def init_db():
     """Crea la base de datos FTS5 y la tabla SRS si no existen en el servidor."""
@@ -50,12 +50,17 @@ def init_db():
 
     conn.close()
 
-# Ejecutar inicialización al arrancar
+# Ejecutar inicialización de tablas SQLite
 init_db()
 
-API_KEY = "AQ.Ab8RN6L7Y3zD_qHG4eKbcfBCGx1NGbEIo9nBlCdUNX0KYIv9SA"
-MODEL_ID = "gemini-2.5-flash"
+# Carga segura de la API Key desde los Secrets encriptados de Streamlit
+if "GEMINI_API_KEY" in st.secrets:
+    API_KEY = st.secrets["GEMINI_API_KEY"]
+else:
+    st.error("⚠️ No se encontró la API Key. Añade 'GEMINI_API_KEY' en los Secrets de tu app en Streamlit Cloud.")
+    st.stop()
 
+MODEL_ID = "gemini-2.5-flash"
 client = genai.Client(api_key=API_KEY)
 
 def query_tatoeba(keyword: str, limit: int = 5):
