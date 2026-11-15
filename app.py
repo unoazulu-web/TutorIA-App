@@ -53,11 +53,11 @@ else:
     st.error("⚠️ No se encontró la API Key en st.secrets['GEMINI_API_KEY']. Configúrala en Secrets de Streamlit Cloud.")
     st.stop()
 
-# Fijado exclusivamente en gemini-3.8-flash con timeout ajustado a 15s para evitar bloqueos
+# Configuración con timeout amplio de 60 segundos (60000 ms) para evitar 'read operation timed out'
 MODEL_ID = "gemini-3.8-flash"
 client = genai.Client(
     api_key=API_KEY,
-    http_options=types.HttpOptions(timeout=15000)
+    http_options=types.HttpOptions(timeout=60000)
 )
 
 def query_tatoeba(keyword: str, limit: int = 5):
@@ -116,7 +116,7 @@ def speak_in_browser(text: str):
 # 3. INTERFAZ Y LÓGICA DE USUARIO
 # -----------------------------------------------------------------------------
 st.title("🎓 RoboTutor AI - Adquisición Acelerada de Inglés")
-st.caption("Modelo Gemini 3.8 Flash | Recasting Conversacional | Latencia de Respuesta < 2s")
+st.caption("Modelo Gemini 3.8 Flash | Recasting Conversacional | Método de Adquisición Natural")
 
 with st.sidebar:
     st.header("⚙️ Configuración")
@@ -164,7 +164,6 @@ if "messages" not in st.session_state:
 if "processed_audio_hashes" not in st.session_state:
     st.session_state.processed_audio_hashes = set()
 
-# Renderizar el historial
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
@@ -180,13 +179,11 @@ if user_input:
 elif audio_val is not None:
     audio_bytes = audio_val.getvalue()
     audio_hash = hashlib.md5(audio_bytes).hexdigest()
-    # Procesar solo audios nuevos y evitar re-envíos infinitos durante reruns
     if audio_hash not in st.session_state.processed_audio_hashes:
         st.session_state.processed_audio_hashes.add(audio_hash)
         active_audio_tuple = (audio_bytes, audio_val.type or "audio/wav")
 
 if active_text or active_audio_tuple:
-    # Ventana deslizante: enviar unicamente los últimos 4 mensajes (reduce payload y latencia)
     recent_messages = st.session_state.messages[-4:]
     formatted_contents = []
     for m in recent_messages:
@@ -219,7 +216,6 @@ if active_text or active_audio_tuple:
             types.Content(role="user", parts=[audio_part, text_part])
         )
 
-    # Generación progresiva en tiempo real
     with st.chat_message("assistant"):
         try:
             response_stream = client.models.generate_content_stream(
@@ -228,7 +224,7 @@ if active_text or active_audio_tuple:
                 config=types.GenerateContentConfig(
                     system_instruction=full_system_instruction,
                     temperature=0.7,
-                    max_output_tokens=120,  # Respuestas cortas = tiempo de respuesta de ~1 a 2 segundos
+                    max_output_tokens=120,
                 )
             )
 
