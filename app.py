@@ -1,9 +1,8 @@
 import sqlite3
-import io
 import streamlit as st
+import streamlit.components.v1 as components
 from google import genai
 from google.genai import types
-from gtts import gTTS
 
 # -----------------------------------------------------------------------------
 # 1. CONFIGURACIÓN INICIAL DE PÁGINA DE STREAMLIT
@@ -104,16 +103,21 @@ def get_cefr_instructions(level: str) -> str:
         - Fluency Goal: Professional mastery and complex technical argumentation.
         """
 
-def speak_text(text: str):
-    """Sintetiza la respuesta del tutor en voz (inglés) y la reproduce."""
-    try:
-        tts = gTTS(text=text, lang='en', slow=False)
-        sound_file = io.BytesIO()
-        tts.write_to_fp(sound_file)
-        sound_file.seek(0)
-        st.audio(sound_file.read(), format="audio/mp3", autoplay=True)
-    except Exception as e:
-        st.warning(f"No se pudo generar la voz: {e}")
+def speak_in_browser(text: str):
+    """Ejecuta Web Speech API directamente en el navegador para latencia 0."""
+    safe_text = text.replace('\\', '\\\\').replace("'", "\\'").replace('\n', ' ')
+    js_code = f"""
+    <script>
+        if ('speechSynthesis' in window) {{
+            window.speechSynthesis.cancel();
+            const utterance = new SpeechSynthesisUtterance('{safe_text}');
+            utterance.lang = 'en-US';
+            utterance.rate = 1.0;
+            window.speechSynthesis.speak(utterance);
+        }}
+    </script>
+    """
+    components.html(js_code, height=0, width=0)
 
 # -----------------------------------------------------------------------------
 # 3. INTERFAZ Y LÓGICA DE USUARIO EN STREAMLIT
@@ -129,7 +133,7 @@ with st.sidebar:
         index=1
     )
     
-    enable_audio_reply = st.toggle("🔊 Respuesta por Voz (Text-to-Speech)", value=True)
+    enable_audio_reply = st.toggle("🔊 Respuesta por Voz Novedosa (Web Speech API)", value=True)
 
     st.divider()
     st.subheader("🔍 Buscador de Frases (Tatoeba FTS5)")
@@ -179,6 +183,7 @@ user_input = st.chat_input("Escribe tu mensaje en inglés...")
 audio_val = st.audio_input("O presiona para grabar tu respuesta hablada")
 
 if user_input or audio_val is not None:
+    # 1. Pasar unicamente historial en texto para optimizar la velocidad
     formatted_contents = []
     for m in st.session_state.messages:
         role = "user" if m["role"] == "user" else "model"
@@ -205,7 +210,7 @@ if user_input or audio_val is not None:
 
         st.session_state.messages.append({"role": "user", "content": "🎙️ [Audio grabado por el estudiante]"})
 
-        prompt_instruction = "Listen to my voice. Address my response using Recasting for any errors, and ask a relevant question."
+        prompt_instruction = "Listen to my voice audio response carefully. Answer my points naturally using Recasting for any errors, and ask a relevant question."
         audio_part = types.Part.from_bytes(data=audio_bytes, mime_type=mime_type)
         text_part = types.Part.from_text(text=prompt_instruction)
 
@@ -213,7 +218,7 @@ if user_input or audio_val is not None:
             types.Content(role="user", parts=[audio_part, text_part])
         )
 
-    # Generación y respuesta en tiempo real
+    # Generación progresiva de texto en tiempo real
     with st.chat_message("assistant"):
         try:
             response_stream = client.models.generate_content_stream(
@@ -233,9 +238,9 @@ if user_input or audio_val is not None:
             bot_reply = st.write_stream(generate_chunks())
             st.session_state.messages.append({"role": "assistant", "content": bot_reply})
 
-            # Generar audio de respuesta automáticamente
+            # Reproducción de voz nativa inmediata sin demoras de red
             if enable_audio_reply and bot_reply:
-                speak_text(bot_reply)
+                speak_in_browser(bot_reply)
 
         except Exception as e:
             st.error(f"Error al comunicar con RoboTutor API: {e}")
