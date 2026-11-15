@@ -60,8 +60,8 @@ else:
     st.error("⚠️ No se encontró la API Key. Añade 'GEMINI_API_KEY' en los Secrets de tu app en Streamlit Cloud.")
     st.stop()
 
-# Usar el modelo activo gemini-2.0-flash
-MODEL_ID = "gemini-2.0-flash"
+# Actualización al modelo activo gemini-3.8-flash
+MODEL_ID = "gemini-3.8-flash"
 client = genai.Client(api_key=API_KEY)
 
 def query_tatoeba(keyword: str, limit: int = 5):
