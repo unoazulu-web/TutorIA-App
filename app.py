@@ -145,7 +145,7 @@ with st.sidebar:
 BASE_SYSTEM_PROMPT = """You are RoboTutor, an AI English teacher built on Task-Based Language Teaching (TBLT).
 
 CORE PEDAGOGICAL PROTOCOL:
-1. COMPREHENSIBLE INPUT (i+1): Keep 85% easy, 15% challenging. Keep responses focused and concise (3 to 4 complete sentences). NEVER stop mid-sentence.
+1. COMPREHENSIBLE INPUT (i+1): Keep 85% easy, 15% challenging. Keep responses engaging and concise (3 to 5 sentences). ALWAYS complete every sentence and idea. NEVER leave a sentence unfinished.
 2. RECASTING TECHNIQUE: Never interrupt or penalize explicitly. Rephrase student mistakes naturally inside your answer.
 3. LEXICAL CHUNKS: Use natural collocations and sentence patterns.
 4. ACTIVE ENGAGEMENT: Always close your response with a clear, open-ended question.
@@ -225,7 +225,7 @@ if active_text or active_audio_tuple:
                     config=types.GenerateContentConfig(
                         system_instruction=full_system_instruction,
                         temperature=0.7,
-                        max_output_tokens=400,
+                        max_output_tokens=1000,
                     )
                 )
                 bot_reply = res.text
@@ -234,4 +234,4 @@ if active_text or active_audio_tuple:
                 if enable_audio_reply and bot_reply:
                     speak_in_browser(bot_reply)
             except Exception as e:
-                st.error(f"Error de conexión con la API de Gemini: {e}")
+                st.error(f"Error de conexión con la API
