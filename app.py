@@ -11,10 +11,10 @@ from google.genai import types
 st.set_page_config(page_title="RoboTutor AI", page_icon="🎓", layout="wide")
 
 # -----------------------------------------------------------------------------
-# 2. AUTO-INICIALIZACIÓN DE BASE DE DATOS Y CONEXIÓN API
+# 2. AUTO-INICIALIZACIÓN DE BASE DE DATOS Y CONEXIÓN A GEMINI 3.8 FLASH
 # -----------------------------------------------------------------------------
 def init_db():
-    """Crea la base de datos FTS5 (<10 ms) y la tabla de memoria SRS."""
+    """Crea la base de datos FTS5 (<10 ms) y la tabla SRS si no existen."""
     conn = sqlite3.connect("tatoeba_pairs.db")
     cursor = conn.cursor()
     cursor.execute("""
@@ -50,12 +50,15 @@ init_db()
 if "GEMINI_API_KEY" in st.secrets:
     API_KEY = st.secrets["GEMINI_API_KEY"]
 else:
-    st.error("⚠️ No se encontró la API Key en st.secrets['GEMINI_API_KEY']. Añádela en la configuración de Streamlit Cloud.")
+    st.error("⚠️ No se encontró la API Key en st.secrets['GEMINI_API_KEY']. Configúrala en Secrets de Streamlit Cloud.")
     st.stop()
 
-# Actualización del modelo al identificador activo solicitado por la API
+# Fijado exclusivamente en gemini-3.8-flash con timeout ajustado a 15s para evitar bloqueos
 MODEL_ID = "gemini-3.8-flash"
-client = genai.Client(api_key=API_KEY)
+client = genai.Client(
+    api_key=API_KEY,
+    http_options=types.HttpOptions(timeout=15000)
+)
 
 def query_tatoeba(keyword: str, limit: int = 5):
     """Búsqueda ultra-rápida FTS5 en corpus bilingüe de Tatoeba (<10 ms)."""
@@ -70,11 +73,11 @@ def query_tatoeba(keyword: str, limit: int = 5):
         return []
 
 def get_cefr_instructions(level: str) -> str:
-    """Matriz pedagógica dinámica según nivel CEFR (A1-C2)."""
+    """Matriz pedagógica dinámica según nivel CEFR."""
     if level == "A1-A2 (Principiante)":
         return """
         CEFR LEVEL: A1-A2 (Beginner)
-        - Conduct: Use short sentences, speak slowly and clearly. Provide brief bilingual support in Spanish when needed.
+        - Conduct: Use short sentences, speak slowly and clearly. Brief bilingual support in Spanish if needed.
         - Correction Rate: Direct and guided (Recasting + brief natural explanation).
         - Fluency Goal: Automate 500 basic structures and everyday vocabulary.
         """
@@ -94,7 +97,7 @@ def get_cefr_instructions(level: str) -> str:
         """
 
 def speak_in_browser(text: str):
-    """Ejecuta la Web Speech API nativa del navegador para latencia 0 en voz."""
+    """Web Speech API local en el navegador (Latencia 0 ms sin llamadas adicionales al servidor)."""
     safe_text = text.replace('\\', '\\\\').replace("'", "\\'").replace('\n', ' ')
     js_code = f"""
     <script>
@@ -113,7 +116,7 @@ def speak_in_browser(text: str):
 # 3. INTERFAZ Y LÓGICA DE USUARIO
 # -----------------------------------------------------------------------------
 st.title("🎓 RoboTutor AI - Adquisición Acelerada de Inglés")
-st.caption("Input Comprensible (i+1) | Recasting Conversacional | Respuestas de Baja Latencia (<3s)")
+st.caption("Modelo Gemini 3.8 Flash | Recasting Conversacional | Latencia de Respuesta < 2s")
 
 with st.sidebar:
     st.header("⚙️ Configuración")
@@ -123,7 +126,7 @@ with st.sidebar:
         index=1
     )
     
-    enable_audio_reply = st.toggle("🔊 Voz Nativa (Browser Speech API)", value=True)
+    enable_audio_reply = st.toggle("🔊 Respuesta por Voz Novedosa (Browser Speech API)", value=True)
 
     st.divider()
     st.subheader("🔍 Buscador de Frases (Tatoeba FTS5)")
@@ -145,22 +148,23 @@ with st.sidebar:
 BASE_SYSTEM_PROMPT = """You are RoboTutor, an AI English teacher built on Task-Based Language Teaching (TBLT).
 
 CORE PEDAGOGICAL PROTOCOL:
-1. COMPREHENSIBLE INPUT (i+1): Keep 85% easy, 15% challenging. Keep responses concise (under 3-4 sentences).
-2. RECASTING TECHNIQUE: Never interrupt or penalize. If the student makes a mistake, rephrase it naturally inside your response.
-3. LEXICAL CHUNKS: Incorporate natural sentence patterns and collocations.
-4. ACTIVE ENGAGEMENT: Always close your response with a clear, open-ended question to encourage speaking.
+1. COMPREHENSIBLE INPUT (i+1): Keep 85% easy, 15% challenging. Keep responses concise (under 2-3 short sentences for low latency).
+2. RECASTING TECHNIQUE: Never interrupt or penalize explicitly. Rephrase student mistakes naturally inside your answer.
+3. LEXICAL CHUNKS: Use natural collocations and sentence patterns.
+4. ACTIVE ENGAGEMENT: Always close your response with a short open question.
 """
 
 full_system_instruction = BASE_SYSTEM_PROMPT + "\n" + get_cefr_instructions(cefr_level)
 
 if "messages" not in st.session_state:
     st.session_state.messages = [
-        {"role": "assistant", "content": f"Hello! I'm RoboTutor. I see you're practicing at the **{cefr_level}** level. How is your day going so far?"}
+        {"role": "assistant", "content": f"Hello! I am RoboTutor. I see you are practicing at the **{cefr_level}** level. How are you doing today?"}
     ]
 
-if "last_processed_audio_hash" not in st.session_state:
-    st.session_state.last_processed_audio_hash = None
+if "processed_audio_hashes" not in st.session_state:
+    st.session_state.processed_audio_hashes = set()
 
+# Renderizar el historial
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
@@ -169,24 +173,22 @@ user_input = st.chat_input("Escribe tu mensaje en inglés...")
 audio_val = st.audio_input("🎙️ Graba tu respuesta hablada")
 
 active_text = None
-active_audio_bytes = None
-audio_mime = None
+active_audio_tuple = None
 
 if user_input:
     active_text = user_input
 elif audio_val is not None:
     audio_bytes = audio_val.getvalue()
     audio_hash = hashlib.md5(audio_bytes).hexdigest()
-    # Evitar repeticiones filtrando audios idénticos por hash MD5
-    if audio_hash != st.session_state.last_processed_audio_hash:
-        st.session_state.last_processed_audio_hash = audio_hash
-        active_audio_bytes = audio_bytes
-        audio_mime = audio_val.type or "audio/wav"
+    # Procesar solo audios nuevos y evitar re-envíos infinitos durante reruns
+    if audio_hash not in st.session_state.processed_audio_hashes:
+        st.session_state.processed_audio_hashes.add(audio_hash)
+        active_audio_tuple = (audio_bytes, audio_val.type or "audio/wav")
 
-if active_text or active_audio_bytes:
-    # Cargar únicamente los últimos 6 mensajes para mantener la latencia baja
+if active_text or active_audio_tuple:
+    # Ventana deslizante: enviar unicamente los últimos 4 mensajes (reduce payload y latencia)
+    recent_messages = st.session_state.messages[-4:]
     formatted_contents = []
-    recent_messages = st.session_state.messages[-6:]
     for m in recent_messages:
         role = "user" if m["role"] == "user" else "model"
         formatted_contents.append(
@@ -201,22 +203,23 @@ if active_text or active_audio_bytes:
             types.Content(role="user", parts=[types.Part.from_text(text=active_text)])
         )
 
-    elif active_audio_bytes:
+    elif active_audio_tuple:
+        bytes_data, mime = active_audio_tuple
         with st.chat_message("user"):
-            st.audio(active_audio_bytes, format=audio_mime)
+            st.audio(bytes_data, format=mime)
             st.caption("🎙️ Mensaje de voz enviado")
 
         st.session_state.messages.append({"role": "user", "content": "🎙️ [Mensaje de voz enviado]"})
 
-        prompt_instruction = "Listen to my audio. Respond concisely using Recasting for any errors, and ask a relevant question."
-        audio_part = types.Part.from_bytes(data=active_audio_bytes, mime_type=audio_mime)
+        prompt_instruction = "Listen to my voice. Apply Recasting if I made mistakes, answer concisely in 2 sentences, and ask an open question."
+        audio_part = types.Part.from_bytes(data=bytes_data, mime_type=mime)
         text_part = types.Part.from_text(text=prompt_instruction)
 
         formatted_contents.append(
             types.Content(role="user", parts=[audio_part, text_part])
         )
 
-    # Generación progresiva en streaming
+    # Generación progresiva en tiempo real
     with st.chat_message("assistant"):
         try:
             response_stream = client.models.generate_content_stream(
@@ -225,7 +228,7 @@ if active_text or active_audio_bytes:
                 config=types.GenerateContentConfig(
                     system_instruction=full_system_instruction,
                     temperature=0.7,
-                    max_output_tokens=250,
+                    max_output_tokens=120,  # Respuestas cortas = tiempo de respuesta de ~1 a 2 segundos
                 )
             )
 
@@ -241,4 +244,4 @@ if active_text or active_audio_bytes:
                 speak_in_browser(bot_reply)
 
         except Exception as e:
-            st.error(f"Error al comunicar con RoboTutor API: {e}")
+            st.error(f"Error al comunicar con la API de Gemini: {e}")
